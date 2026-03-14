@@ -206,3 +206,118 @@ class TestIndicatorLogic:
     def test_classify_signal_neutral(self):
         from indicators import classify_signal
         assert classify_signal(rsi=50) == "neutral"
+
+    def test_classify_signal_trending_up(self):
+        from indicators import classify_signal
+        assert classify_signal(rsi=50, sma_20=155.0, sma_50=150.0) == "trending_up"
+
+    def test_classify_signal_trending_down(self):
+        from indicators import classify_signal
+        assert classify_signal(rsi=50, sma_20=145.0, sma_50=150.0) == "trending_down"
+
+    def test_classify_signal_sma_equal_returns_neutral(self):
+        from indicators import classify_signal
+        assert classify_signal(rsi=50, sma_20=150.0, sma_50=150.0) == "neutral"
+
+    def test_rsi_boundary_exactly_70_is_overbought(self):
+        from indicators import classify_signal
+        assert classify_signal(rsi=70) == "overbought"
+
+    def test_rsi_boundary_exactly_30_is_oversold(self):
+        from indicators import classify_signal
+        assert classify_signal(rsi=30) == "oversold"
+
+
+class TestHealthEndpoint:
+    def test_health_returns_200(self):
+        client = get_client()
+        resp = client.get("/health")
+        assert resp.status_code == 200
+
+    def test_health_returns_ok_status(self):
+        client = get_client()
+        resp = client.get("/health")
+        data = resp.json()
+        assert data["status"] == "ok"
+
+
+class TestSafeFloat:
+    def test_safe_float_none_returns_none(self):
+        from main import safe_float
+        assert safe_float(None) is None
+
+    def test_safe_float_nan_returns_none(self):
+        import math
+        from main import safe_float
+        assert safe_float(float("nan")) is None
+
+    def test_safe_float_valid_float_returns_rounded(self):
+        from main import safe_float
+        result = safe_float(3.14159)
+        assert result == 3.1416
+
+    def test_safe_float_invalid_string_returns_none(self):
+        from main import safe_float
+        assert safe_float("not_a_number") is None
+
+    def test_safe_float_integer_returns_float(self):
+        from main import safe_float
+        result = safe_float(42)
+        assert result == 42.0
+        assert isinstance(result, float)
+
+
+class TestFetchOhlcv:
+    def test_fetch_ohlcv_returns_none_on_exception(self):
+        import yfinance as yf
+        from main import fetch_ohlcv
+        with patch.object(yf.Ticker, "history", side_effect=Exception("network error")):
+            result = fetch_ohlcv("FAKE")
+        assert result is None
+
+    def test_fetch_ohlcv_returns_none_on_empty_df(self):
+        import pandas as pd
+        from main import fetch_ohlcv
+        empty_df = pd.DataFrame()
+        with patch("main.yf.Ticker") as mock_ticker:
+            mock_ticker.return_value.history.return_value = empty_df
+            result = fetch_ohlcv("EMPTY")
+        assert result is None
+
+
+class TestCaching:
+    def test_cache_hit_skips_fetch(self):
+        import main
+        import time
+        client = get_client()
+        mock_df = make_mock_df()
+        # Warm the cache
+        with patch("main.fetch_ohlcv", return_value=mock_df) as mock_fetch:
+            client.get("/api/ticker/AAPL/indicators")
+            first_call_count = mock_fetch.call_count
+
+        # Second call should hit cache — fetch_ohlcv not called again
+        with patch("main.fetch_ohlcv", return_value=mock_df) as mock_fetch2:
+            client.get("/api/ticker/AAPL/indicators")
+            assert mock_fetch2.call_count == 0, "Cache hit should skip fetch_ohlcv"
+
+
+class TestHistoryLength:
+    def test_history_capped_at_90_rows(self):
+        client = get_client()
+        # 200 rows of data — history should be capped at 90
+        mock_df = make_mock_df(200)
+        with patch("main.fetch_ohlcv", return_value=mock_df):
+            resp = client.get("/api/ticker/MSFT/indicators")
+        data = resp.json()
+        assert len(data["history"]) <= 90
+
+    def test_history_includes_indicator_columns(self):
+        client = get_client()
+        mock_df = make_mock_df()
+        with patch("main.fetch_ohlcv", return_value=mock_df):
+            resp = client.get("/api/ticker/MSFT/indicators")
+        data = resp.json()
+        entry = data["history"][0]
+        for field in ("sma_20", "sma_50", "rsi", "macd", "macd_signal", "bb_upper", "bb_lower"):
+            assert field in entry
