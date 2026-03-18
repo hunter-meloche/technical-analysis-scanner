@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import TickerCard from './components/TickerCard.jsx'
 import DetailPanel from './components/DetailPanel.jsx'
 
-const API_BASE = '/api'
+const API_BASE = import.meta.env.BASE_URL + 'api'
 
 export default function App() {
   const [tickers, setTickers] = useState([])
